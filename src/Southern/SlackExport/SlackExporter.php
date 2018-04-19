@@ -12,6 +12,7 @@ use RuntimeException;
 class SlackExporter
 {
     const MAX_ITERATIONS = 100;
+    const SLEEP = 1;
 
     protected $usersInfo;
     protected $channelsInfo;
@@ -238,6 +239,9 @@ ABC;
     protected function callApi($method, array $params = [])
     {
         $response = $this->api->execute($method, $params + ['token' => $this->token]);
+
+        sleep(self::SLEEP);
+
         $body = $response->getBody();
         /** @var array $body */
         if (true !== $body['ok']) {
