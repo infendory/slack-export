@@ -10,7 +10,7 @@
     }
   ],
   "require": {
-    "frlnc/php-slack": "1.0.3"
+    "guzzlehttp/guzzle": "^6.3"
   },
   "autoload": {
     "psr-4": {"Southern\\": "src/Southern/"}

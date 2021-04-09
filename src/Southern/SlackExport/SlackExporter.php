@@ -2,9 +2,6 @@
 
 namespace Southern\SlackExport;
 
-use Frlnc\Slack\Core\Commander;
-use Frlnc\Slack\Http\CurlInteractor;
-use Frlnc\Slack\Http\SlackResponseFactory;
 use InvalidArgumentException;
 use LogicException;
 use RuntimeException;
@@ -15,24 +12,18 @@ class SlackExporter
     const SLEEP = 1;
 
     protected $usersInfo;
-    protected $channelsInfo;
-    protected $groupsInfo;
-    protected $imsInfo;
+    
+    protected $conversationsInfo;
 
-    protected $api;
+    /** @var SlackClient  */
+    protected $client;
 
     protected $token;
 
-    protected $debugMode = true;
-
     public function __construct($token)
     {
-        $interactor = new CurlInteractor;
-        $interactor->setResponseFactory(new SlackResponseFactory);
-        $commander = new Commander($token, $interactor);
-
-        $this->api = $commander;
         $this->token = $token;
+        $this->client = new SlackClient($token);
     }
 
     protected function ensureUsersLoaded()
@@ -42,24 +33,11 @@ class SlackExporter
         }
     }
 
-    protected function ensureImsLoaded()
+    protected function ensureConversationsLoaded()
     {
-        if (null === $this->imsInfo) {
-            $this->imsInfo = ArrayUtils::indexByColumn($this->callApi('im.list')['ims']);
-        }
-    }
-
-    protected function ensureChannelsLoaded()
-    {
-        if (null === $this->channelsInfo) {
-            $this->channelsInfo = ArrayUtils::indexByColumn($this->callApi('channels.list')['channels']);
-        }
-    }
-
-    protected function ensureGroupsLoaded()
-    {
-        if (null === $this->groupsInfo) {
-            $this->groupsInfo = ArrayUtils::indexByColumn($this->callApi('groups.list')['groups']);
+        if (null === $this->conversationsInfo) {
+            $apiResponse = $this->callApi('users.conversations', ['types' => 'public_channel,private_channel,mpim,im']);
+            $this->conversationsInfo = ArrayUtils::indexByColumn($apiResponse['channels']);
         }
     }
 
@@ -72,51 +50,21 @@ class SlackExporter
         return $this->usersInfo[$id];
     }
 
-    protected function getMessages($objectsType, $channelId, $since, $till)
+    protected function getConversationMessages($channelId, $since, $till)
     {
-        return $this->cycle("$objectsType.history", ['channel' => $channelId], $since, $till);
-    }
-
-    public function getChannelsHistory($since, $till)
-    {
-        $this->ensureChannelsLoaded();
-        $channelMessages = [];
-        foreach ($this->channelsInfo as $channelId => $info) {
-            $channelMessages[$info['name_normalized']] = $this->getMessages("channels", $channelId, $since, $till);
-        }
-        return $channelMessages;
+        return $this->cycle("conversations.history", ['channel' => $channelId], $since, $till);
     }
     
-    public function getImsHistory($since, $till)
-    {
-        $this->ensureUsersLoaded();
-        $this->ensureImsLoaded();
-        $imMessages = [];
-        foreach ($this->imsInfo as $imId => $info) {
-            $name = $this->usersInfo[$info['user']]['name'];
-            $imMessages[$name] = $this->getMessages("im", $imId, $since, $till);
-        }
-        return $imMessages;
-    }
-
-    public function getGroupsHistory($since, $till)
-    {
-        $this->ensureGroupsLoaded();
-        $groupMessages = [];
-        foreach ($this->groupsInfo as $groupId => $info) {
-            $groupMessages[$info['name_normalized']] = $this->getMessages("groups", $groupId, $since, $till);
-        }
-        return $groupMessages;
-    }
-
     public function getAllHistories($since, $till)
     {
-        $histories = [
-            'channels' => $this->getChannelsHistory($since, $till),
-            'ims' => $this->getImsHistory($since, $till),
-            'groups' => $this->getGroupsHistory($since, $till),
-        ];
-        return $histories;
+        $this->ensureConversationsLoaded();
+        $messages = [];
+        foreach ($this->conversationsInfo as $conversationId => $info) {
+            $conversationType = $this->getConversationType($info);
+            $conversationCaption = $this->getConversationCaption($info);
+            $messages["{$conversationType}s"][$conversationCaption] = $this->getConversationMessages($conversationId, $since, $till);
+        }
+        return $messages;
     }
 
     public function getForWeek()
@@ -137,11 +85,36 @@ class SlackExporter
         return $this->getAllHistories($since, $till);
     }
 
+    protected function getConversationType($conversationInfo)
+    {
+        if ($conversationInfo['is_im']) {
+            return 'im';
+        } elseif ($conversationInfo['is_mpim']) {
+            return 'mpim';
+        } elseif ($conversationInfo['is_channel']) {
+            return 'channel';
+        } elseif ($conversationInfo['is_group']) {
+            return 'group';
+        } else {
+            throw new LogicException("Unexpected conversation type");
+        }
+    }
+    
+    protected function getConversationCaption($conversationInfo)
+    {
+        if ($conversationInfo['is_im']) {
+            $this->ensureUsersLoaded();
+            return $this->usersInfo[$conversationInfo['user']]['name'];
+        } else {
+            return $conversationInfo['name_normalized'];
+        }
+    }
+    
     public function regroup($histories, $intervalTitle)
     {
         $results = [];
 
-        $entities = ['channel', 'im', 'group'];
+        $entities = ['channel', 'im', 'group', 'mpim'];
 
         foreach ($entities as $entity) {
             foreach ($histories["{$entity}s"] as $name => $messages) {
@@ -238,11 +211,11 @@ ABC;
      */
     protected function callApi($method, array $params = [])
     {
-        $response = $this->api->execute($method, $params + ['token' => $this->token]);
+        $response = $this->client->execute($method, $params + ['token' => $this->token]);
 
         sleep(self::SLEEP);
 
-        $body = $response->getBody();
+        $body = $response;
         /** @var array $body */
         if (true !== $body['ok']) {
             throw new RuntimeException("Calling $method failed: {$body['error']}, params: " . var_export($params, true));
