@@ -117,6 +117,9 @@ class SlackExporter
         $entities = ['channel', 'im', 'group', 'mpim'];
 
         foreach ($entities as $entity) {
+            if (!isset($histories["{$entity}s"])) {
+                continue;
+            }
             foreach ($histories["{$entity}s"] as $name => $messages) {
                 if (count($messages) == 0) {
                     continue;
