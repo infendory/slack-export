@@ -211,7 +211,7 @@ ABC;
      */
     protected function callApi($method, array $params = [])
     {
-        $response = $this->client->execute($method, $params + ['token' => $this->token]);
+        $response = $this->client->execute($method, $params);
 
         sleep(self::SLEEP);
 
